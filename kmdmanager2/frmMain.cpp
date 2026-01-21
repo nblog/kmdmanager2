@@ -21,24 +21,33 @@
 #include <dwmapi.h>
 #pragma comment(lib, "Dwmapi.lib")
 
+#include <msclr/marshal_cppstd.h>
 
 namespace kmdmanager2 {
-	static String^ GetLastErrorString(UInt32 errCode = ::GetLastError()) {
-		DWORD dwError = errCode;
-		if (0 == dwError) return "Completed.";
+	static std::wstring ToNativeString(String^ str) {
+		if (String::IsNullOrEmpty(str)) return std::wstring();
+		return msclr::interop::marshal_as<std::wstring>(str);
+	}
 
-		LPWSTR lpMsgBuf = NULL;
-		::FormatMessageW(
+	static String^ GetLastErrorString(DWORD errCode = ::GetLastError()) {
+		if (0 == errCode) return "Completed.";
+
+		LPWSTR lpMsgBuf = nullptr;
+		DWORD result = ::FormatMessageW(
 			FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			NULL, 
-			dwError, 
+			nullptr, 
+			errCode, 
 			MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), 
-			(LPWSTR)&lpMsgBuf, 0, NULL);
+			reinterpret_cast<LPWSTR>(&lpMsgBuf), 0, nullptr);
+
+		if (0 == result || nullptr == lpMsgBuf) {
+			return String::Format("Error code: 0x{0:X8}", errCode);
+		}
 
 		String^ errstr = gcnew String(lpMsgBuf);
 		::LocalFree(lpMsgBuf);
 
-		return errstr;
+		return errstr->TrimEnd();
 	}
 
 	static System::Void UpdateWindowVisualEffects(System::IntPtr Handle) {
@@ -205,30 +214,57 @@ namespace kmdmanager2 {
 			this->btnRun_Click(sender, e);
 		}
 
+		if (!m_driverSession->HasSession()) {
+			MessageBox::Show("No driver registered.", "Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
+			return System::Void();
+		}
+
 		unsigned int value = 0;
-		if (UInt32::TryParse(this->txtCtlCode->Text, value))
+		if (!String::IsNullOrWhiteSpace(this->txtCtlCode->Text)) {
+			value = Convert::ToUInt32(this->txtCtlCode->Text, 16);
 			this->myCfg->CtlCode = value;
+		}
 
 		if (0 == this->myCfg->CtlCode) {
 			MessageBox::Show("Invalid control code.", "Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
 			return System::Void();
 		}
 
-		cli::pin_ptr<Byte> pInBuffer = \
+		std::wstring devicePath = L"\\\\.\\" + ToNativeString(this->myCfg->DriverName);
+		wil::unique_hfile hDevice(::CreateFileW(
+			devicePath.c_str(),
+			GENERIC_READ | GENERIC_WRITE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE,
+			nullptr,
+			OPEN_EXISTING,
+			FILE_ATTRIBUTE_NORMAL,
+			nullptr));
+
+		if (!hDevice) {
+			AddLogItem(this->myCfg->DriverName, "I/O Control", false, 
+				"Failed to open device: " + GetLastErrorString());
+			if (this->chkAutoAll->Checked) {
+				this->btnStop_Click(sender, e);
+				this->btnUnregister_Click(sender, e);
+			}
+			return System::Void();
+		}
+
+		cli::pin_ptr<Byte> pInBuffer = 
 			this->myCfg->InBuffer->Length ? &this->myCfg->InBuffer[0] : nullptr;
-		cli::pin_ptr<Byte> pOutBuffer = \
+		cli::pin_ptr<Byte> pOutBuffer = 
 			this->myCfg->OutBuffer->Length ? &this->myCfg->OutBuffer[0] : nullptr;
 
 		DWORD dwBytesReturned = 0;
 		BOOL isOk = ::DeviceIoControl(
-			INVALID_HANDLE_VALUE,
+			hDevice.get(),
 			this->myCfg->CtlCode,
 			pInBuffer, this->myCfg->InBuffer->Length,
-			pOutBuffer, this->myCfg->OutBuffer->Length, &dwBytesReturned, NULL);
+			pOutBuffer, this->myCfg->OutBuffer->Length, 
+			&dwBytesReturned, nullptr);
 
-		this->lvwDriver->Items->Add(gcnew ListViewItem(gcnew cli::array<String^> {
-			this->myCfg->DriverName, "I/O Control", isOk ? "Success" : "Failure", isOk ? String::Format("Written: {0}", dwBytesReturned) : GetLastErrorString()
-		}));
+		AddLogItem(this->myCfg->DriverName, "I/O Control", isOk != FALSE,
+			isOk ? String::Format("Written: {0} bytes", dwBytesReturned) : GetLastErrorString());
 
 		if (this->chkAutoAll->Checked) {
 			this->btnStop_Click(sender, e);
@@ -239,12 +275,19 @@ namespace kmdmanager2 {
 	}
 
 	inline System::Void frmMain::btnRegister_Click(System::Object^ sender, System::EventArgs^ e) {
-		if (String::Empty == this->txtDriverPath->Text || !IO::File::Exists(IO::Path::GetFullPath(this->txtDriverPath->Text))) {
+		if (String::IsNullOrWhiteSpace(this->txtDriverPath->Text) || 
+			!IO::File::Exists(IO::Path::GetFullPath(this->txtDriverPath->Text))) {
 			MessageBox::Show("Driver file not found.", "Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
 			return System::Void();
 		}
 
-		if (this->chkAltitude->Checked && this->txtAltitude->Text != String::Empty) {
+		if (m_driverSession->HasSession()) {
+			MessageBox::Show("Driver already registered. Please unregister first.", "Warning", 
+				MessageBoxButtons::OK, MessageBoxIcon::Warning);
+			return System::Void();
+		}
+
+		if (this->chkAltitude->Checked && !String::IsNullOrEmpty(this->txtAltitude->Text)) {
 			unsigned int value = 0;
 			bool isNumeric = UInt32::TryParse(this->txtAltitude->Text, value);
 			// https://learn.microsoft.com/windows-hardware/drivers/ifs/load-order-groups-and-altitudes-for-minifilter-drivers
@@ -261,19 +304,38 @@ namespace kmdmanager2 {
 		this->myCfg->DriverPath = IO::Path::GetFullPath(this->txtDriverPath->Text);
 		this->myCfg->DriverName = IO::Path::GetFileNameWithoutExtension(this->myCfg->DriverPath);
 
-		// ...
+		std::wstring driverPath = ToNativeString(this->myCfg->DriverPath);
+		std::wstring driverName = ToNativeString(this->myCfg->DriverName);
+
+		std::optional<ServiceManager::DriverSession> session;
 		if (this->chkAltitude->Checked) {
-			this->myCfg->Altitude;
+			// 创建 FSFilter 驱动会话
+			std::wstring altitude = ToNativeString(this->myCfg->Altitude.ToString());
+			session = ServiceManager::DriverSession::CreateFSFilter(
+				altitude.c_str(),
+				driverPath.c_str(),
+				driverName.c_str(),
+				driverName.c_str(),
+				ServiceManager::DriverCleanupPolicy::None);  // 手动控制清理
 		}
 		else {
-
+			// 创建普通内核驱动会话
+			session = ServiceManager::DriverSession::Create(
+				driverPath.c_str(),
+				driverName.c_str(),
+				driverName.c_str(),
+				ServiceManager::DriverCleanupPolicy::None);  // 手动控制清理
 		}
 
-		this->lvwDriver->Items->Add(gcnew ListViewItem(gcnew cli::array<String^> {
-			this->myCfg->DriverName, "Register", false ? "Success" : "Failure", GetLastErrorString()
-		}));
+		bool success = session.has_value();
+		if (success) {
+			m_driverSession->SetSession(std::move(session.value()));
+		}
 
-		if (this->chkAutoRun->Checked) {
+		AddLogItem(this->myCfg->DriverName, "Register", success, 
+			success ? "Completed." : GetLastErrorString());
+
+		if (success && this->chkAutoRun->Checked) {
 			this->btnRun_Click(sender, e);
 		}
 
@@ -281,8 +343,8 @@ namespace kmdmanager2 {
 	}
 
 	inline System::Void frmMain::btnUnregister_Click(System::Object^ sender, System::EventArgs^ e) {
-		if (String::Empty == this->txtDriverPath->Text || !IO::File::Exists(this->myCfg->DriverPath)) {
-			MessageBox::Show("Driver file not found.", "Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
+		if (!m_driverSession->HasSession()) {
+			MessageBox::Show("No driver registered.", "Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
 			return System::Void();
 		}
 
@@ -290,40 +352,43 @@ namespace kmdmanager2 {
 			this->btnStop_Click(sender, e);
 		}
 
-		// ...
-		this->lvwDriver->Items->Add(gcnew ListViewItem(gcnew cli::array<String^> {
-			this->myCfg->DriverName, "Unregister", false ? "Success" : "Failure", GetLastErrorString()
-		}));
+		bool success = m_driverSession->Get()->Delete();
 
-		this->myCfg->reset();
+		AddLogItem(this->myCfg->DriverName, "Unregister", success,
+			success ? "Completed." : GetLastErrorString());
+
+		if (success) {
+			m_driverSession->Reset();
+			this->myCfg->reset();
+		}
 
 		return System::Void();
 	}
 
 	inline System::Void frmMain::btnRun_Click(System::Object^ sender, System::EventArgs^ e) {
-		if (String::Empty == this->myCfg->DriverName) {
-			MessageBox::Show("Driver file not found.", "Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
+		if (!m_driverSession->HasSession()) {
+			MessageBox::Show("No driver registered.", "Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
 			return System::Void();
 		}
 
-		// ...
-		this->lvwDriver->Items->Add(gcnew ListViewItem(gcnew cli::array<String^> {
-			this->myCfg->DriverName, "Run", false ? "Success" : "Failure", GetLastErrorString()
-		}));
+		bool success = m_driverSession->Get()->Start();
+
+		AddLogItem(this->myCfg->DriverName, "Run", success,
+			success ? "Completed." : GetLastErrorString());
 
 		return System::Void();
 	}
 
 	inline System::Void frmMain::btnStop_Click(System::Object^ sender, System::EventArgs^ e) {
-		if (String::Empty == this->myCfg->DriverName) {
-			MessageBox::Show("Driver file not found.", "Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
+		if (!m_driverSession->HasSession()) {
+			MessageBox::Show("No driver registered.", "Error", MessageBoxButtons::OK, MessageBoxIcon::Error);
 			return System::Void();
 		}
 
-		// ...
-		this->lvwDriver->Items->Add(gcnew ListViewItem(gcnew cli::array<String^> {
-			this->myCfg->DriverName, "Stop", false ? "Success" : "Failure", GetLastErrorString()
-		}));
+		bool success = m_driverSession->Get()->Stop();
+
+		AddLogItem(this->myCfg->DriverName, "Stop", success,
+			success ? "Completed." : GetLastErrorString());
 
 		return System::Void();
 	}
@@ -333,6 +398,7 @@ namespace kmdmanager2 {
 		auto AboutMessage = String::Format(R"(Kernel-Mode Driver Manager  v{0}.{1}.{2}
 
 https://github.com/nblog/kmdmanager2)", version->Major, version->Minor, version->Build);
+
 		MessageBox::Show(gcnew String(AboutMessage), "About", MessageBoxButtons::OK, MessageBoxIcon::Information);
 
 		return System::Void();

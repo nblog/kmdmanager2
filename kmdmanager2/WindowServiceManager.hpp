@@ -2,15 +2,147 @@
 
 #pragma managed(push, off)
 
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-#include <wil/resource.h>
-
 #include <optional>
 #include <string>
 #include <chrono>
+#include <memory>
+#include <functional>
+
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#include <wil/resource.h>
+#pragma comment(lib, "Advapi32.lib")
+
 
 namespace ServiceManager {
+
+	// 前向声明
+	class WindowServiceManager;
+
+	/// <summary>
+	/// 驱动清理策略
+	/// </summary>
+	enum class DriverCleanupPolicy {
+		None,       // 不自动清理
+		StopOnly,   // 析构时只停止驱动，不删除服务
+		Full        // 析构时停止并删除服务（默认）
+	};
+
+	/// <summary>
+	/// RAII 驱动会话管理器 - 管理驱动的完整生命周期
+	/// </summary>
+	class DriverSession {
+	public:
+		// 禁止拷贝
+		DriverSession(const DriverSession&) = delete;
+		DriverSession& operator=(const DriverSession&) = delete;
+
+		// 允许移动
+		DriverSession(DriverSession&& other) noexcept
+			: m_serviceName(std::move(other.m_serviceName))
+			, m_policy(other.m_policy)
+			, m_isInstalled(other.m_isInstalled)
+			, m_isRunning(other.m_isRunning) {
+			other.m_isInstalled = false;
+			other.m_isRunning = false;
+		}
+
+		DriverSession& operator=(DriverSession&& other) noexcept {
+			if (this != &other) {
+				Cleanup();
+				m_serviceName = std::move(other.m_serviceName);
+				m_policy = other.m_policy;
+				m_isInstalled = other.m_isInstalled;
+				m_isRunning = other.m_isRunning;
+				other.m_isInstalled = false;
+				other.m_isRunning = false;
+			}
+			return *this;
+		}
+
+		/// <summary>
+		/// 析构时根据策略自动清理
+		/// </summary>
+		~DriverSession() noexcept {
+			Cleanup();
+		}
+
+		/// <summary>
+		/// 创建内核驱动会话
+		/// </summary>
+		[[nodiscard]] static std::optional<DriverSession> Create(
+			LPCWSTR szBinaryPath,
+			LPCWSTR szServiceName,
+			LPCWSTR szDisplayName = nullptr,
+			DriverCleanupPolicy policy = DriverCleanupPolicy::Full) noexcept;
+
+		/// <summary>
+		/// 创建文件系统过滤驱动会话
+		/// </summary>
+		[[nodiscard]] static std::optional<DriverSession> CreateFSFilter(
+			LPCWSTR szAltitude,
+			LPCWSTR szBinaryPath,
+			LPCWSTR szServiceName,
+			LPCWSTR szDisplayName = nullptr,
+			DriverCleanupPolicy policy = DriverCleanupPolicy::Full) noexcept;
+
+		/// <summary>
+		/// 启动驱动
+		/// </summary>
+		[[nodiscard]] bool Start() noexcept;
+
+		/// <summary>
+		/// 停止驱动
+		/// </summary>
+		[[nodiscard]] bool Stop() noexcept;
+
+		/// <summary>
+		/// 删除驱动服务（会先停止）
+		/// </summary>
+		[[nodiscard]] bool Delete() noexcept;
+
+		/// <summary>
+		/// 检查驱动是否已安装
+		/// </summary>
+		[[nodiscard]] bool IsInstalled() const noexcept { return m_isInstalled; }
+
+		/// <summary>
+		/// 检查驱动是否正在运行
+		/// </summary>
+		[[nodiscard]] bool IsRunning() const noexcept { return m_isRunning; }
+
+		/// <summary>
+		/// 获取服务名称
+		/// </summary>
+		[[nodiscard]] const std::wstring& ServiceName() const noexcept { return m_serviceName; }
+
+		/// <summary>
+		/// 设置清理策略
+		/// </summary>
+		void SetCleanupPolicy(DriverCleanupPolicy policy) noexcept { m_policy = policy; }
+
+		/// <summary>
+		/// 释放所有权（不再自动清理）
+		/// </summary>
+		void Release() noexcept {
+			m_policy = DriverCleanupPolicy::None;
+		}
+
+	private:
+		explicit DriverSession(std::wstring serviceName, DriverCleanupPolicy policy) noexcept
+			: m_serviceName(std::move(serviceName))
+			, m_policy(policy)
+			, m_isInstalled(true)
+			, m_isRunning(false) {
+		}
+
+		void Cleanup() noexcept;
+
+		bool m_isInstalled = false;
+		bool m_isRunning = false;
+		std::wstring m_serviceName;
+		DriverCleanupPolicy m_policy = DriverCleanupPolicy::Full;
+	};
 
 	/// <summary>
 	/// 提供驱动程序和服务的安装、启动、停止、删除等操作
@@ -146,7 +278,7 @@ namespace ServiceManager {
 			SERVICE_STATUS ss{};
 			if (::QueryServiceStatus(hService.get(), &ss) && ss.dwCurrentState != SERVICE_STOPPED) {
 				::ControlService(hService.get(), SERVICE_CONTROL_STOP, &ss);
-				WaitForServiceState(hService.get(), SERVICE_STOPPED, std::chrono::seconds(30));
+				(void)WaitForServiceState(hService.get(), SERVICE_STOPPED, std::chrono::seconds(60));
 			}
 
 			return ::DeleteService(hService.get()) != FALSE;
@@ -318,6 +450,101 @@ namespace ServiceManager {
 		wil::unique_schandle m_hSCManager;
 	};
 
-} // namespace ServiceManager
+	inline std::optional<DriverSession> DriverSession::Create(
+		LPCWSTR szBinaryPath,
+		LPCWSTR szServiceName,
+		LPCWSTR szDisplayName,
+		DriverCleanupPolicy policy) noexcept {
+		
+		WindowServiceManager svcMgr;
+		if (!svcMgr.IsValid()) {
+			return std::nullopt;
+		}
+
+		LPCWSTR displayName = szDisplayName ? szDisplayName : szServiceName;
+		if (!svcMgr.InstallDriver(szBinaryPath, szServiceName, displayName)) {
+			return std::nullopt;
+		}
+
+		return DriverSession(szServiceName, policy);
+	}
+
+	inline std::optional<DriverSession> DriverSession::CreateFSFilter(
+		LPCWSTR szAltitude,
+		LPCWSTR szBinaryPath,
+		LPCWSTR szServiceName,
+		LPCWSTR szDisplayName,
+		DriverCleanupPolicy policy) noexcept {
+		
+		WindowServiceManager svcMgr;
+		if (!svcMgr.IsValid()) {
+			return std::nullopt;
+		}
+
+		LPCWSTR displayName = szDisplayName ? szDisplayName : szServiceName;
+		if (!svcMgr.InstallFSFilter(szAltitude, szBinaryPath, szServiceName, displayName)) {
+			return std::nullopt;
+		}
+
+		return DriverSession(szServiceName, policy);
+	}
+
+	inline bool DriverSession::Start() noexcept {
+		if (!m_isInstalled) return false;
+		
+		WindowServiceManager svcMgr;
+		if (!svcMgr.IsValid()) return false;
+
+		if (svcMgr.ServiceStart(m_serviceName.c_str())) {
+			m_isRunning = true;
+			return true;
+		}
+		return false;
+	}
+
+	inline bool DriverSession::Stop() noexcept {
+		if (!m_isInstalled) return true;
+		
+		WindowServiceManager svcMgr;
+		if (!svcMgr.IsValid()) return false;
+
+		if (svcMgr.ServiceStop(m_serviceName.c_str())) {
+			m_isRunning = false;
+			return true;
+		}
+		return false;
+	}
+
+	inline bool DriverSession::Delete() noexcept {
+		if (!m_isInstalled) return true;
+
+		WindowServiceManager svcMgr;
+		if (!svcMgr.IsValid()) return false;
+
+		if (svcMgr.ServiceDelete(m_serviceName.c_str())) {
+			m_isInstalled = false;
+			m_isRunning = false;
+			return true;
+		}
+		return false;
+	}
+
+	inline void DriverSession::Cleanup() noexcept {
+		if (!m_isInstalled) return;
+
+		switch (m_policy) {
+		case DriverCleanupPolicy::StopOnly:
+			(void)Stop();
+			break;
+		case DriverCleanupPolicy::Full:
+			(void)Delete();
+			break;
+		case DriverCleanupPolicy::None:
+		default:
+			break;
+		}
+	}
+
+}
 
 #pragma managed(pop)

@@ -417,7 +417,49 @@ namespace kmdmanager2 {
 			LoadDriverConfig() { reset(); }
 		};
 		LoadDriverConfig^ myCfg = gcnew LoadDriverConfig();
+
+		ref class DriverSessionWrapper {
+		public:
+			DriverSessionWrapper() : m_session(nullptr) {}
+			
+			~DriverSessionWrapper() { this->!DriverSessionWrapper(); }
+			!DriverSessionWrapper() {
+				Reset();
+			}
+
+			bool HasSession() { return m_session != nullptr; }
+
+			void SetSession(ServiceManager::DriverSession&& session) {
+				Reset();
+				m_session = new ServiceManager::DriverSession(std::move(session));
+			}
+
+			ServiceManager::DriverSession* Get() { return m_session; }
+
+			void Reset() {
+				if (m_session) {
+					delete m_session;
+					m_session = nullptr;
+				}
+			}
+
+			void Release() {
+				if (m_session) {
+					m_session->Release();
+				}
+			}
+		private:
+			ServiceManager::DriverSession* m_session;
+		};
+		DriverSessionWrapper^ m_driverSession = gcnew DriverSessionWrapper();
+
 	protected: virtual System::Void WndProc(Message% m) override;
+	private:
+		inline System::Void AddLogItem(String^ driverName, String^ operation, bool success, String^ result) {
+			this->lvwDriver->Items->Add(gcnew ListViewItem(gcnew cli::array<String^> {
+				driverName, operation, success ? "Success" : "Failure", result
+			}));
+		}
 	private: System::Void frmMain_Load(System::Object^ sender, System::EventArgs^ e);
 	private: System::Void btnExit_Click(System::Object^ sender, System::EventArgs^ e);
 	private: System::Void btnFileDialog_Click(System::Object^ sender, System::EventArgs^ e);
