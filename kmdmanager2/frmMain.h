@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include "WindowServiceManager.hpp"
+
 namespace kmdmanager2 {
 
 	using namespace System;
@@ -133,6 +135,7 @@ namespace kmdmanager2 {
 			this->groupBox1->Size = System::Drawing::Size(160, 75);
 			this->groupBox1->TabIndex = 15;
 			this->groupBox1->TabStop = false;
+			this->groupBox1->Text = L"FSFilter";
 			// 
 			// chkAltitude
 			// 

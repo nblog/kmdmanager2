@@ -42,6 +42,8 @@ namespace kmdmanager2 {
 	}
 
 	static System::Void UpdateWindowVisualEffects(System::IntPtr Handle) {
+		HWND hWnd = (HWND)Handle.ToPointer();
+
 		RTL_OSVERSIONINFOW versionInfo = {};
 #pragma warning( push )
 #pragma warning( disable : 4996 )
@@ -51,7 +53,6 @@ namespace kmdmanager2 {
 		versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
 		if (!NT_SUCCESS(RtlGetVersion(&versionInfo))) return;
 #pragma warning( pop )
-		HWND hWnd = (HWND)Handle.ToPointer();
 
 		if (versionInfo.dwMajorVersion >= 10) {
 			if (versionInfo.dwBuildNumber >= 22000) {
@@ -99,8 +100,6 @@ namespace kmdmanager2 {
 	}
 
 	inline System::Void frmMain::frmMain_Load(System::Object^ sender, System::EventArgs^ e) {
-		this->Text = "Kernel-Mode Driver Manager";
-		this->groupBox1->Text = " FSFilter ";
 		UpdateWindowVisualEffects(this->Handle);
 
 		::ChangeWindowMessageFilterEx(HWND(this->Handle.ToPointer()), WM_DROPFILES, MSGFLT_ALLOW, NULL);
@@ -137,6 +136,8 @@ namespace kmdmanager2 {
 			this->lvwDriver->Columns->AddRange(gcnew cli::array<ColumnHeader^> {
 				chDriver, chOperation, chStatus, chResult
 			});
+
+			this->Text = "Kernel-Mode Driver Manager";
 		}
 
 		return System::Void();
