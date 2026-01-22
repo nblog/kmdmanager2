@@ -73,7 +73,7 @@ namespace ServiceManager {
 		[[nodiscard]] static std::optional<DriverSession> Create(
 			LPCWSTR szBinaryPath,
 			LPCWSTR szServiceName,
-			LPCWSTR szDisplayName = nullptr,
+			LPCWSTR szDisplayName = NULL,
 			DriverCleanupPolicy policy = DriverCleanupPolicy::Full) noexcept;
 
 		/// <summary>
@@ -83,7 +83,7 @@ namespace ServiceManager {
 			LPCWSTR szAltitude,
 			LPCWSTR szBinaryPath,
 			LPCWSTR szServiceName,
-			LPCWSTR szDisplayName = nullptr,
+			LPCWSTR szDisplayName = NULL,
 			DriverCleanupPolicy policy = DriverCleanupPolicy::Full) noexcept;
 
 		/// <summary>
@@ -162,7 +162,7 @@ namespace ServiceManager {
 		/// </summary>
 		/// <param name="dwAccess">访问权限，默认为 SC_MANAGER_ALL_ACCESS</param>
 		explicit WindowServiceManager(DWORD dwAccess = SC_MANAGER_ALL_ACCESS) noexcept
-			: m_hSCManager(::OpenSCManagerW(nullptr, nullptr, dwAccess)) {
+			: m_hSCManager(::OpenSCManagerW(NULL, NULL, dwAccess)) {
 		}
 
 		/// <summary>
@@ -232,7 +232,7 @@ namespace ServiceManager {
 				::OpenServiceW(m_hSCManager.get(), szServiceName, SERVICE_START));
 			if (!hService) return false;
 
-			if (::StartServiceW(hService.get(), 0, nullptr)) {
+			if (::StartServiceW(hService.get(), 0, NULL)) {
 				return true;
 			}
 			return ::GetLastError() == ERROR_SERVICE_ALREADY_RUNNING;
@@ -297,7 +297,7 @@ namespace ServiceManager {
 			LPCWSTR szDisplayName) const noexcept {
 			return InstallServiceInternal(
 				szBinaryPath, szServiceName, szDisplayName,
-				SERVICE_KERNEL_DRIVER, nullptr, nullptr);
+				SERVICE_KERNEL_DRIVER, NULL, NULL);
 		}
 
 		/// <summary>
@@ -343,7 +343,7 @@ namespace ServiceManager {
 			if (!m_hSCManager) return false;
 
 			WCHAR szDriverImagePath[MAX_PATH]{};
-			if (::GetFullPathNameW(szBinaryPath, MAX_PATH, szDriverImagePath, nullptr) == 0) {
+			if (::GetFullPathNameW(szBinaryPath, MAX_PATH, szDriverImagePath, NULL) == 0) {
 				return false;
 			}
 
@@ -357,10 +357,10 @@ namespace ServiceManager {
 				SERVICE_ERROR_NORMAL,
 				szDriverImagePath,
 				szLoadOrderGroup,
-				nullptr,
+				NULL,
 				szDependencies,
-				nullptr,
-				nullptr));
+				NULL,
+				NULL));
 
 			if (!hService) {
 				return ::GetLastError() == ERROR_SERVICE_EXISTS;
@@ -414,8 +414,8 @@ namespace ServiceManager {
 			wil::unique_hkey hInstancesKey;
 			DWORD disposition = 0;
 			status = ::RegCreateKeyExW(
-				hKey.get(), L"Instances", 0, nullptr,
-				REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &hInstancesKey, &disposition);
+				hKey.get(), L"Instances", 0, NULL,
+				REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &hInstancesKey, &disposition);
 			if (status != ERROR_SUCCESS) return false;
 
 			if (bSetAsDefaultInstance) {
@@ -428,8 +428,8 @@ namespace ServiceManager {
 
 			wil::unique_hkey hInstanceKey;
 			status = ::RegCreateKeyExW(
-				hInstancesKey.get(), szInstanceName, 0, nullptr,
-				REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &hInstanceKey, &disposition);
+				hInstancesKey.get(), szInstanceName, 0, NULL,
+				REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &hInstanceKey, &disposition);
 			if (status != ERROR_SUCCESS) return false;
 
 			// 设置 Altitude

@@ -11,6 +11,61 @@ namespace kmdmanager2 {
 	using namespace System::Data;
 	using namespace System::Drawing;
 
+	ref struct LoadDriverConfig
+	{
+		UInt32 Altitude;
+		String^ DriverPath;
+		String^ DriverName;
+		UInt32 CtlCode;
+		cli::array<Byte>^ InBuffer;
+		cli::array<Byte>^ OutBuffer;
+
+		System::Void reset()
+		{
+			Altitude = 260000;
+			DriverPath = String::Empty;
+			DriverName = String::Empty;
+			CtlCode = 0;
+			InBuffer = gcnew cli::array<Byte>(0);
+			OutBuffer = gcnew cli::array<Byte>(0);
+		}
+
+		LoadDriverConfig() { reset(); }
+	};
+
+	ref struct DriverSessionWrapper {
+		DriverSessionWrapper() : m_session(nullptr) {}
+
+		~DriverSessionWrapper() { this->!DriverSessionWrapper(); }
+		!DriverSessionWrapper() {
+			Reset();
+		}
+
+		bool HasSession() { return m_session != nullptr; }
+
+		void SetSession(ServiceManager::DriverSession&& session) {
+			Reset();
+			m_session = new ServiceManager::DriverSession(std::move(session));
+		}
+
+		ServiceManager::DriverSession* Get() { return m_session; }
+
+		void Reset() {
+			if (m_session) {
+				delete m_session;
+				m_session = nullptr;
+			}
+		}
+
+		void Release() {
+			if (m_session) {
+				m_session->Release();
+			}
+		}
+	private:
+		ServiceManager::DriverSession* m_session;
+	};
+
 	/// <summary>
 	/// frmMain 摘要
 	/// </summary>
@@ -211,6 +266,7 @@ namespace kmdmanager2 {
 			this->btnOptions->TabIndex = 2;
 			this->btnOptions->Text = L"&Options...";
 			this->btnOptions->UseVisualStyleBackColor = true;
+			this->btnOptions->Click += gcnew System::EventHandler(this, &frmMain::btnOptions_Click);
 			// 
 			// groupBox3
 			// 
@@ -394,65 +450,6 @@ namespace kmdmanager2 {
 
 		}
 #pragma endregion
-	protected:
-		ref struct LoadDriverConfig
-		{
-			UInt32 Altitude;
-			String^ DriverPath;
-			String^ DriverName;
-			UInt32 CtlCode;
-			cli::array<Byte>^ InBuffer;
-			cli::array<Byte>^ OutBuffer;
-
-			System::Void reset()
-			{
-				Altitude = 260000;
-				DriverPath = String::Empty;
-				DriverName = String::Empty;
-				CtlCode = 0;
-				InBuffer = gcnew cli::array<Byte>(0);
-				OutBuffer = gcnew cli::array<Byte>(0);
-			}
-
-			LoadDriverConfig() { reset(); }
-		};
-		LoadDriverConfig^ myCfg = gcnew LoadDriverConfig();
-
-		ref class DriverSessionWrapper {
-		public:
-			DriverSessionWrapper() : m_session(nullptr) {}
-			
-			~DriverSessionWrapper() { this->!DriverSessionWrapper(); }
-			!DriverSessionWrapper() {
-				Reset();
-			}
-
-			bool HasSession() { return m_session != nullptr; }
-
-			void SetSession(ServiceManager::DriverSession&& session) {
-				Reset();
-				m_session = new ServiceManager::DriverSession(std::move(session));
-			}
-
-			ServiceManager::DriverSession* Get() { return m_session; }
-
-			void Reset() {
-				if (m_session) {
-					delete m_session;
-					m_session = nullptr;
-				}
-			}
-
-			void Release() {
-				if (m_session) {
-					m_session->Release();
-				}
-			}
-		private:
-			ServiceManager::DriverSession* m_session;
-		};
-		DriverSessionWrapper^ m_driverSession = gcnew DriverSessionWrapper();
-
 	protected: virtual System::Void WndProc(Message% m) override;
 	private:
 		inline System::Void AddLogItem(String^ driverName, String^ operation, bool success, String^ result) {
@@ -460,6 +457,8 @@ namespace kmdmanager2 {
 				driverName, operation, success ? "Success" : "Failure", result
 			}));
 		}
+		LoadDriverConfig^ myCfg = gcnew LoadDriverConfig();
+		DriverSessionWrapper^ m_driverSession = gcnew DriverSessionWrapper();
 	private: System::Void frmMain_Load(System::Object^ sender, System::EventArgs^ e);
 	private: System::Void btnExit_Click(System::Object^ sender, System::EventArgs^ e);
 	private: System::Void btnFileDialog_Click(System::Object^ sender, System::EventArgs^ e);
@@ -473,6 +472,7 @@ namespace kmdmanager2 {
 	private: System::Void btnUnregister_Click(System::Object^ sender, System::EventArgs^ e);
 	private: System::Void btnRun_Click(System::Object^ sender, System::EventArgs^ e);
 	private: System::Void btnStop_Click(System::Object^ sender, System::EventArgs^ e);
+	private: System::Void btnOptions_Click(System::Object^ sender, System::EventArgs^ e);
 	private: System::Void btnAbout_Click(System::Object^ sender, System::EventArgs^ e);
 };
 }

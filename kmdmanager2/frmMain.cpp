@@ -1,5 +1,6 @@
 ﻿#include "pch.h"
 #include "frmMain.h"
+#include "frmOptions.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -136,7 +137,7 @@ namespace kmdmanager2 {
 
 			auto chStatus = gcnew ColumnHeader();
 			chStatus->Text = "Status";
-			chStatus->Width = 60;
+			chStatus->Width = 80;
 
 			auto chResult = gcnew ColumnHeader();
 			chResult->Text = "Result";
@@ -390,6 +391,12 @@ namespace kmdmanager2 {
 		AddLogItem(this->myCfg->DriverName, "Stop", success,
 			success ? "Completed." : GetLastErrorString());
 
+		return System::Void();
+	}
+
+	inline System::Void frmMain::btnOptions_Click(System::Object^ sender, System::EventArgs^ e) {
+		frmOptions^ optionsForm = gcnew frmOptions(this->myCfg);
+		optionsForm->ShowDialog(this);
 		return System::Void();
 	}
 
